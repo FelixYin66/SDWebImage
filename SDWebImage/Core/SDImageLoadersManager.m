@@ -88,6 +88,8 @@
     return NO;
 }
 
+
+//图片下载
 - (id<SDWebImageOperation>)requestImageWithURL:(NSURL *)url options:(SDWebImageOptions)options context:(SDWebImageContext *)context progress:(SDImageLoaderProgressBlock)progressBlock completed:(SDImageLoaderCompletedBlock)completedBlock {
     if (!url) {
         return nil;

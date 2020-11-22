@@ -28,6 +28,7 @@ static void * SDMemoryCacheContext = &SDMemoryCacheContext;
     [_config removeObserver:self forKeyPath:NSStringFromSelector(@selector(maxMemoryCost)) context:SDMemoryCacheContext];
     [_config removeObserver:self forKeyPath:NSStringFromSelector(@selector(maxMemoryCount)) context:SDMemoryCacheContext];
 #if SD_UIKIT
+    //移除 内存警告通知
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidReceiveMemoryWarningNotification object:nil];
 #endif
     self.delegate = nil;
@@ -60,9 +61,11 @@ static void * SDMemoryCacheContext = &SDMemoryCacheContext;
     [config addObserver:self forKeyPath:NSStringFromSelector(@selector(maxMemoryCount)) options:0 context:SDMemoryCacheContext];
 
 #if SD_UIKIT
+    //创建一个表缓存UIImage
     self.weakCache = [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory valueOptions:NSPointerFunctionsWeakMemory capacity:0];
     self.weakCacheLock = dispatch_semaphore_create(1);
 
+    //添加内存警告通知
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(didReceiveMemoryWarning:)
                                                  name:UIApplicationDidReceiveMemoryWarningNotification
@@ -72,11 +75,13 @@ static void * SDMemoryCacheContext = &SDMemoryCacheContext;
 
 // Current this seems no use on macOS (macOS use virtual memory and do not clear cache when memory warning). So we only override on iOS/tvOS platform.
 #if SD_UIKIT
+//清空所有
 - (void)didReceiveMemoryWarning:(NSNotification *)notification {
     // Only remove cache, but keep weak cache
     [super removeAllObjects];
 }
 
+//重写NSCache的setObject方法
 // `setObject:forKey:` just call this with 0 cost. Override this is enough
 - (void)setObject:(id)obj forKey:(id)key cost:(NSUInteger)g {
     [super setObject:obj forKey:key cost:g];
@@ -91,6 +96,7 @@ static void * SDMemoryCacheContext = &SDMemoryCacheContext;
     }
 }
 
+//重写NSCache objectForKey方法
 - (id)objectForKey:(id)key {
     id obj = [super objectForKey:key];
     if (!self.config.shouldUseWeakMemoryCache) {

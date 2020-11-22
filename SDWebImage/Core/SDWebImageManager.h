@@ -22,6 +22,8 @@ typedef void(^SDInternalCompletionBlock)(UIImage * _Nullable image, NSData * _Nu
 /**
  A combined operation representing the cache and loader operation. You can use it to cancel the load process.
  */
+
+//SDWebImageCombinedOperation 是一个组合型Operation，其中包含了loader operation,cache operation
 @interface SDWebImageCombinedOperation : NSObject <SDWebImageOperation>
 
 /**

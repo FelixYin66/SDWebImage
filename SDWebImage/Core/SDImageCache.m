@@ -20,11 +20,11 @@ static NSString * _defaultDiskCacheDirectory;
 @interface SDImageCache ()
 
 #pragma mark - Properties
-@property (nonatomic, strong, readwrite, nonnull) id<SDMemoryCache> memoryCache;
-@property (nonatomic, strong, readwrite, nonnull) id<SDDiskCache> diskCache;
-@property (nonatomic, copy, readwrite, nonnull) SDImageCacheConfig *config;
+@property (nonatomic, strong, readwrite, nonnull) id<SDMemoryCache> memoryCache; //有一个内存缓存
+@property (nonatomic, strong, readwrite, nonnull) id<SDDiskCache> diskCache; //有一个磁盘缓存
+@property (nonatomic, copy, readwrite, nonnull) SDImageCacheConfig *config; //缓存配置
 @property (nonatomic, copy, readwrite, nonnull) NSString *diskCachePath;
-@property (nonatomic, strong, nullable) dispatch_queue_t ioQueue;
+@property (nonatomic, strong, nullable) dispatch_queue_t ioQueue; //io队列 是一个串行队列
 
 @end
 
@@ -66,39 +66,43 @@ static NSString * _defaultDiskCacheDirectory;
     return [self initWithNamespace:ns diskCacheDirectory:directory config:SDImageCacheConfig.defaultCacheConfig];
 }
 
+//初始化缓存配置
 - (nonnull instancetype)initWithNamespace:(nonnull NSString *)ns
                        diskCacheDirectory:(nullable NSString *)directory
                                    config:(nullable SDImageCacheConfig *)config {
     if ((self = [super init])) {
         NSAssert(ns, @"Cache namespace should not be nil");
         
-        // Create IO serial queue
+        // Create IO serial queue 创建一个串行队列
         _ioQueue = dispatch_queue_create("com.hackemist.SDImageCache", DISPATCH_QUEUE_SERIAL);
         
         if (!config) {
+            //缓存配置
             config = SDImageCacheConfig.defaultCacheConfig;
         }
         _config = [config copy];
         
         // Init the memory cache
         NSAssert([config.memoryCacheClass conformsToProtocol:@protocol(SDMemoryCache)], @"Custom memory cache class must conform to `SDMemoryCache` protocol");
+        //默认使用 SDMemoryCache
         _memoryCache = [[config.memoryCacheClass alloc] initWithConfig:_config];
         
         // Init the disk cache
         if (!directory) {
-            // Use default disk cache directory
+            // Use default disk cache directory 使用默认的磁盘缓存路径
             directory = [self.class defaultDiskCacheDirectory];
         }
         _diskCachePath = [directory stringByAppendingPathComponent:ns];
         
         NSAssert([config.diskCacheClass conformsToProtocol:@protocol(SDDiskCache)], @"Custom disk cache class must conform to `SDDiskCache` protocol");
+        //默认使用SDDiskCache
         _diskCache = [[config.diskCacheClass alloc] initWithCachePath:_diskCachePath config:_config];
         
         // Check and migrate disk cache directory if need
         [self migrateDiskCacheDirectory];
 
 #if SD_UIKIT
-        // Subscribe to app events
+        // Subscribe to app events 添加通知 1.程序被杀死（手动退出），2.程序进入后台
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(applicationWillTerminate:)
                                                      name:UIApplicationWillTerminateNotification
@@ -138,6 +142,7 @@ static NSString * _defaultDiskCacheDirectory;
     return paths.firstObject;
 }
 
+//移动磁盘缓存
 - (void)migrateDiskCacheDirectory {
     if ([self.diskCache isKindOfClass:[SDDiskCache class]]) {
         static dispatch_once_t onceToken;
@@ -460,6 +465,7 @@ static NSString * _defaultDiskCacheDirectory;
     return [self queryCacheOperationForKey:key options:options context:context cacheType:SDImageCacheTypeAll done:doneBlock];
 }
 
+//从缓存中查找
 - (nullable NSOperation *)queryCacheOperationForKey:(nullable NSString *)key options:(SDImageCacheOptions)options context:(nullable SDWebImageContext *)context cacheType:(SDImageCacheType)queryCacheType done:(nullable SDImageCacheQueryCompletionBlock)doneBlock {
     if (!key) {
         if (doneBlock) {
@@ -475,20 +481,23 @@ static NSString * _defaultDiskCacheDirectory;
         return nil;
     }
     
-    // First check the in-memory cache...
+    // First check the in-memory cache... //首先检查内存
     UIImage *image;
     if (queryCacheType != SDImageCacheTypeDisk) {
         image = [self imageFromMemoryCacheForKey:key];
     }
     
     if (image) {
+        //加载完之后解码
         if (options & SDImageCacheDecodeFirstFrameOnly) {
             // Ensure static image
             Class animatedImageClass = image.class;
+            //检查是否为动图
             if (image.sd_isAnimated || ([animatedImageClass isSubclassOfClass:[UIImage class]] && [animatedImageClass conformsToProtocol:@protocol(SDAnimatedImage)])) {
 #if SD_MAC
                 image = [[NSImage alloc] initWithCGImage:image.CGImage scale:image.scale orientation:kCGImagePropertyOrientationUp];
 #else
+                //对图片进行解码 在异步线程中
                 image = [[UIImage alloc] initWithCGImage:image.CGImage scale:image.scale orientation:image.imageOrientation];
 #endif
             }
@@ -510,14 +519,16 @@ static NSString * _defaultDiskCacheDirectory;
         return nil;
     }
     
-    // Second check the disk cache...
+    // Second check the disk cache... 检查磁盘缓存
     NSOperation *operation = [NSOperation new];
     // Check whether we need to synchronously query disk
     // 1. in-memory cache hit & memoryDataSync
     // 2. in-memory cache miss & diskDataSync
     BOOL shouldQueryDiskSync = ((image && options & SDImageCacheQueryMemoryDataSync) ||
                                 (!image && options & SDImageCacheQueryDiskDataSync));
+    //异步或者同步执行检查磁盘缓存
     void(^queryDiskBlock)(void) =  ^{
+        //操作可能被取消
         if (operation.isCancelled) {
             if (doneBlock) {
                 doneBlock(nil, nil, SDImageCacheTypeNone);
@@ -536,6 +547,7 @@ static NSString * _defaultDiskCacheDirectory;
                 diskImage = [self diskImageForKey:key data:diskData options:options context:context];
                 if (diskImage && self.config.shouldCacheImagesInMemory) {
                     NSUInteger cost = diskImage.sd_memoryCost;
+                    //将图片缓存
                     [self.memoryCache setObject:diskImage forKey:key cost:cost];
                 }
             }
@@ -653,6 +665,7 @@ static NSString * _defaultDiskCacheDirectory;
 #pragma mark - UIApplicationWillTerminateNotification
 
 #if SD_UIKIT || SD_MAC
+//程序中断
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [self deleteOldFilesWithCompletionBlock:nil];
 }
@@ -660,7 +673,9 @@ static NSString * _defaultDiskCacheDirectory;
 
 #pragma mark - UIApplicationDidEnterBackgroundNotification
 
-#if SD_UIKIT
+#if SD_UIKI
+
+//程序进入后台
 - (void)applicationDidEnterBackground:(NSNotification *)notification {
     if (!self.config.shouldRemoveExpiredDataWhenEnterBackground) {
         return;
@@ -737,6 +752,7 @@ static NSString * _defaultDiskCacheDirectory;
     return [self queryImageForKey:key options:options context:context cacheType:SDImageCacheTypeAll completion:completionBlock];
 }
 
+//检查缓存
 - (id<SDWebImageOperation>)queryImageForKey:(NSString *)key options:(SDWebImageOptions)options context:(nullable SDWebImageContext *)context cacheType:(SDImageCacheType)cacheType completion:(nullable SDImageCacheQueryCompletionBlock)completionBlock {
     SDImageCacheOptions cacheOptions = 0;
     if (options & SDWebImageQueryMemoryData) cacheOptions |= SDImageCacheQueryMemoryData;

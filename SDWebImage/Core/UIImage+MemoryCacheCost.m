@@ -10,6 +10,7 @@
 #import "objc/runtime.h"
 #import "NSImage+Compatibility.h"
 
+//计算文件大小
 FOUNDATION_STATIC_INLINE NSUInteger SDMemoryCacheCostForImage(UIImage *image) {
     CGImageRef imageRef = image.CGImage;
     if (!imageRef) {

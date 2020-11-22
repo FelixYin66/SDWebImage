@@ -46,6 +46,8 @@ const int64_t SDWebImageProgressUnitCountUnknown = 1LL;
     objc_setAssociatedObject(self, @selector(sd_imageProgress), sd_imageProgress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+
+//下载方法
 - (void)sd_internalSetImageWithURL:(nullable NSURL *)url
                   placeholderImage:(nullable UIImage *)placeholder
                            options:(SDWebImageOptions)options
@@ -57,28 +59,32 @@ const int64_t SDWebImageProgressUnitCountUnknown = 1LL;
         // copy to avoid mutable object
         context = [context copy];
     } else {
+        //context一开始为你来
         context = [NSDictionary dictionary];
     }
     NSString *validOperationKey = context[SDWebImageContextSetImageOperationKey];
     if (!validOperationKey) {
         // pass through the operation key to downstream, which can used for tracing operation or image view class
-        validOperationKey = NSStringFromClass([self class]);
+        validOperationKey = NSStringFromClass([self class]); //使用当前类名作为key
         SDWebImageMutableContext *mutableContext = [context mutableCopy];
         mutableContext[SDWebImageContextSetImageOperationKey] = validOperationKey;
         context = [mutableContext copy];
     }
     self.sd_latestOperationKey = validOperationKey;
-    [self sd_cancelImageLoadOperationWithKey:validOperationKey];
+    [self sd_cancelImageLoadOperationWithKey:validOperationKey]; //取消下载操作
     self.sd_imageURL = url;
     
+    //设置占位图
     if (!(options & SDWebImageDelayPlaceholder)) {
         dispatch_main_async_safe(^{
+            //主线程同步执行任务
             [self sd_setImage:placeholder imageData:nil basedOnClassOrViaCustomSetImageBlock:setImageBlock cacheType:SDImageCacheTypeNone imageURL:url];
         });
     }
     
+    //当URL为有效值时
     if (url) {
-        // reset the progress
+        // reset the progress 使用关联对象
         NSProgress *imageProgress = objc_getAssociatedObject(self, @selector(sd_imageProgress));
         if (imageProgress) {
             imageProgress.totalUnitCount = 0;
@@ -90,16 +96,18 @@ const int64_t SDWebImageProgressUnitCountUnknown = 1LL;
         [self sd_startImageIndicator];
         id<SDWebImageIndicator> imageIndicator = self.sd_imageIndicator;
 #endif
+        //图片下载管理类
         SDWebImageManager *manager = context[SDWebImageContextCustomManager];
         if (!manager) {
             manager = [SDWebImageManager sharedManager];
         } else {
             // remove this manager to avoid retain cycle (manger -> loader -> operation -> context -> manager)
             SDWebImageMutableContext *mutableContext = [context mutableCopy];
-            mutableContext[SDWebImageContextCustomManager] = nil;
+            mutableContext[SDWebImageContextCustomManager] = nil; //标记为 不是一个自定义的管理对象
             context = [mutableContext copy];
         }
         
+        //设置下载进度回调
         SDImageLoaderProgressBlock combinedProgressBlock = ^(NSInteger receivedSize, NSInteger expectedSize, NSURL * _Nullable targetURL) {
             if (imageProgress) {
                 imageProgress.totalUnitCount = expectedSize;
@@ -121,7 +129,10 @@ const int64_t SDWebImageProgressUnitCountUnknown = 1LL;
                 progressBlock(receivedSize, expectedSize, targetURL);
             }
         };
+        //图片下载处理
         @weakify(self);
+        
+        //返回一个SDWebImageCombinedOperation Operation对象
         id <SDWebImageOperation> operation = [manager loadImageWithURL:url options:options context:context progress:combinedProgressBlock completed:^(UIImage *image, NSData *data, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
             @strongify(self);
             if (!self) { return; }

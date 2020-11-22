@@ -74,6 +74,7 @@ typedef NSMutableDictionary<NSString *, id> SDCallbacksDictionary;
     return [self initWithRequest:request inSession:session options:options context:nil];
 }
 
+//通过网络请求下载图片
 - (nonnull instancetype)initWithRequest:(nullable NSURLRequest *)request
                               inSession:(nullable NSURLSession *)session
                                 options:(SDWebImageDownloaderOptions)options
@@ -101,7 +102,9 @@ typedef NSMutableDictionary<NSString *, id> SDCallbacksDictionary;
 - (nullable id)addHandlersForProgress:(nullable SDWebImageDownloaderProgressBlock)progressBlock
                             completed:(nullable SDWebImageDownloaderCompletedBlock)completedBlock {
     SDCallbacksDictionary *callbacks = [NSMutableDictionary new];
+    //进度回调
     if (progressBlock) callbacks[kProgressCallbackKey] = [progressBlock copy];
+    //下载完成回调
     if (completedBlock) callbacks[kCompletedCallbackKey] = [completedBlock copy];
     @synchronized (self) {
         [self.callbackBlocks addObject:callbacks];
@@ -148,6 +151,7 @@ typedef NSMutableDictionary<NSString *, id> SDCallbacksDictionary;
     return shouldCancel;
 }
 
+//重写NSOperation的Start方法 也就是任务开始
 - (void)start {
     @synchronized (self) {
         if (self.isCancelled) {
@@ -178,6 +182,9 @@ typedef NSMutableDictionary<NSString *, id> SDCallbacksDictionary;
              *  Create the session for this task
              *  We send nil as delegate queue so that the session creates a serial operation queue for performing all delegate
              *  method calls and completion handler calls.
+             *
+             *
+             *  创建下载网络请求
              */
             session = [NSURLSession sessionWithConfiguration:sessionConfig
                                                     delegate:self
@@ -216,12 +223,14 @@ typedef NSMutableDictionary<NSString *, id> SDCallbacksDictionary;
             self.dataTask.priority = NSURLSessionTaskPriorityDefault;
             self.coderQueue.qualityOfService = NSQualityOfServiceDefault;
         }
+        //开始下载任务
         [self.dataTask resume];
         for (SDWebImageDownloaderProgressBlock progressBlock in [self callbacksForKey:kProgressCallbackKey]) {
             progressBlock(0, NSURLResponseUnknownLength, self.request.URL);
         }
         __block typeof(self) strongSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
+            //发送通知图片开始下载
             [[NSNotificationCenter defaultCenter] postNotificationName:SDWebImageDownloadStartNotification object:strongSelf];
         });
     } else {
@@ -427,6 +436,7 @@ didReceiveResponse:(NSURLResponse *)response
 
 #pragma mark NSURLSessionTaskDelegate
 
+//图片下载完成回调
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     // If we already cancel the operation or anything mark the operation finished, don't callback twice
     if (self.isFinished) return;
@@ -451,11 +461,13 @@ didReceiveResponse:(NSURLResponse *)response
         [self callCompletionBlocksWithError:error];
         [self done];
     } else {
+        //图片下载完成
         if ([self callbacksForKey:kCompletedCallbackKey].count > 0) {
             NSData *imageData = [self.imageData copy];
             self.imageData = nil;
             // data decryptor
             if (imageData && self.decryptor) {
+                //调用解码器
                 imageData = [self.decryptor decryptedDataWithData:imageData response:self.response];
             }
             if (imageData) {
@@ -471,12 +483,14 @@ didReceiveResponse:(NSURLResponse *)response
                     // decode the image in coder queue, cancel all previous decoding process
                     [self.coderQueue cancelAllOperations];
                     [self.coderQueue addOperationWithBlock:^{
+                        //图片解码
                         UIImage *image = SDImageLoaderDecodeImageData(imageData, self.request.URL, [[self class] imageOptionsFromDownloaderOptions:self.options], self.context);
                         CGSize imageSize = image.size;
                         if (imageSize.width == 0 || imageSize.height == 0) {
                             NSString *description = image == nil ? @"Downloaded image decode failed" : @"Downloaded image has 0 pixels";
                             [self callCompletionBlocksWithError:[NSError errorWithDomain:SDWebImageErrorDomain code:SDWebImageErrorBadImageData userInfo:@{NSLocalizedDescriptionKey : description}]];
                         } else {
+                            //图片解码之后
                             [self callCompletionBlocksWithImage:image imageData:imageData error:nil finished:YES];
                         }
                         [self done];
@@ -552,6 +566,7 @@ didReceiveResponse:(NSURLResponse *)response
                              finished:(BOOL)finished {
     NSArray<id> *completionBlocks = [self callbacksForKey:kCompletedCallbackKey];
     dispatch_main_async_safe(^{
+        //有两个回调，一个下载进度回调，一个下载完成回调
         for (SDWebImageDownloaderCompletedBlock completedBlock in completionBlocks) {
             completedBlock(image, imageData, error, finished);
         }

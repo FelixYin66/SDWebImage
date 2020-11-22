@@ -137,6 +137,8 @@ static NSString * const SDDiskCacheExtendedAttributeName = @"com.hackemist.SDDis
                                   error:NULL];
 }
 
+
+//程序中断的时候清空过期文件
 - (void)removeExpiredData {
     NSURL *diskCacheURL = [NSURL fileURLWithPath:self.diskCachePath isDirectory:YES];
     

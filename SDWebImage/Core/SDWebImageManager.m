@@ -20,9 +20,9 @@ static id<SDImageLoader> _defaultImageLoader;
 @interface SDWebImageCombinedOperation ()
 
 @property (assign, nonatomic, getter = isCancelled) BOOL cancelled;
-@property (strong, nonatomic, readwrite, nullable) id<SDWebImageOperation> loaderOperation;
-@property (strong, nonatomic, readwrite, nullable) id<SDWebImageOperation> cacheOperation;
-@property (weak, nonatomic, nullable) SDWebImageManager *manager;
+@property (strong, nonatomic, readwrite, nullable) id<SDWebImageOperation> loaderOperation; //下载Operation
+@property (strong, nonatomic, readwrite, nullable) id<SDWebImageOperation> cacheOperation; //缓存Operation
+@property (weak, nonatomic, nullable) SDWebImageManager *manager; //管理者
 
 @end
 
@@ -71,10 +71,12 @@ static id<SDImageLoader> _defaultImageLoader;
 }
 
 - (nonnull instancetype)init {
+    //初始化图片缓存
     id<SDImageCache> cache = [[self class] defaultImageCache];
     if (!cache) {
-        cache = [SDImageCache sharedImageCache];
+        cache = [SDImageCache sharedImageCache]; //SDImageCache继承自NSObject，其中有一个Memory，DiskCache两个类
     }
+    //初始化图片下载管理器
     id<SDImageLoader> loader = [[self class] defaultImageLoader];
     if (!loader) {
         loader = [SDWebImageDownloader sharedDownloader];
@@ -87,9 +89,9 @@ static id<SDImageLoader> _defaultImageLoader;
         _imageCache = cache;
         _imageLoader = loader;
         _failedURLs = [NSMutableSet new];
-        _failedURLsLock = dispatch_semaphore_create(1);
-        _runningOperations = [NSMutableSet new];
-        _runningOperationsLock = dispatch_semaphore_create(1);
+        _failedURLsLock = dispatch_semaphore_create(1); //通过信号量控制并发数量 请求失败的URL
+        _runningOperations = [NSMutableSet new]; //保存运行中的Operation
+        _runningOperationsLock = dispatch_semaphore_create(1); //通过信号量控制并发数量 一个线程处理Operation
     }
     return self;
 }
@@ -101,7 +103,7 @@ static id<SDImageLoader> _defaultImageLoader;
     
     NSString *key;
     // Cache Key Filter
-    id<SDWebImageCacheKeyFilter> cacheKeyFilter = self.cacheKeyFilter;
+    id<SDWebImageCacheKeyFilter> cacheKeyFilter = self.cacheKeyFilter; //缓存过滤，遵守SDWebImageCacheKeyFilter协议
     if (cacheKeyFilter) {
         key = [cacheKeyFilter cacheKeyForURL:url];
     } else {
@@ -164,6 +166,7 @@ static id<SDImageLoader> _defaultImageLoader;
     return [self loadImageWithURL:url options:options context:nil progress:progressBlock completed:completedBlock];
 }
 
+//SDWebImageManager 加载图片
 - (SDWebImageCombinedOperation *)loadImageWithURL:(nullable NSURL *)url
                                           options:(SDWebImageOptions)options
                                           context:(nullable SDWebImageContext *)context
@@ -174,6 +177,7 @@ static id<SDImageLoader> _defaultImageLoader;
 
     // Very common mistake is to send the URL using NSString object instead of NSURL. For some strange reason, Xcode won't
     // throw any warning for this type mismatch. Here we failsafe this error by allowing URLs to be passed as NSString.
+    //做一个类型转换
     if ([url isKindOfClass:NSString.class]) {
         url = [NSURL URLWithString:(NSString *)url];
     }
@@ -183,31 +187,37 @@ static id<SDImageLoader> _defaultImageLoader;
         url = nil;
     }
 
+    //创建一个CombinedOperation对象继承自NSObject，并遵守SDWebImageOperation的协议
     SDWebImageCombinedOperation *operation = [SDWebImageCombinedOperation new];
     operation.manager = self;
 
     BOOL isFailedUrl = NO;
     if (url) {
-        SD_LOCK(self.failedURLsLock);
+        SD_LOCK(self.failedURLsLock); //通过信号量 保证数据安全
+        //检查url是否有加载失败记录
         isFailedUrl = [self.failedURLs containsObject:url];
         SD_UNLOCK(self.failedURLsLock);
     }
 
     if (url.absoluteString.length == 0 || (!(options & SDWebImageRetryFailed) && isFailedUrl)) {
+        //如果是一个无效的url或者是一个 直接返回Operation
         NSString *description = isFailedUrl ? @"Image url is blacklisted" : @"Image url is nil";
         NSInteger code = isFailedUrl ? SDWebImageErrorBlackListed : SDWebImageErrorInvalidURL;
+        
+        //并调用回调告诉UIView
         [self callCompletionBlockForOperation:operation completion:completedBlock error:[NSError errorWithDomain:SDWebImageErrorDomain code:code userInfo:@{NSLocalizedDescriptionKey : description}] url:url];
         return operation;
     }
 
     SD_LOCK(self.runningOperationsLock);
+    //保存一个Operation 对象
     [self.runningOperations addObject:operation];
     SD_UNLOCK(self.runningOperationsLock);
     
     // Preprocess the options and context arg to decide the final the result for manager
     SDWebImageOptionsResult *result = [self processedResultForURL:url options:options context:context];
     
-    // Start the entry to load image from cache
+    // Start the entry to load image from cache 从缓存中加载图片
     [self callCacheProcessForOperation:operation url:url options:result.options context:result.context progress:progressBlock completed:completedBlock];
 
     return operation;
@@ -245,6 +255,7 @@ static id<SDImageLoader> _defaultImageLoader;
 
 #pragma mark - Private
 
+//从缓存中加载图片
 // Query normal cache process
 - (void)callCacheProcessForOperation:(nonnull SDWebImageCombinedOperation *)operation
                                  url:(nonnull NSURL *)url
@@ -266,11 +277,18 @@ static id<SDImageLoader> _defaultImageLoader;
         queryCacheType = [context[SDWebImageContextQueryCacheType] integerValue];
     }
     
-    // Check whether we should query cache
+    // Check whether we should query cache 检查策略
     BOOL shouldQueryCache = !SD_OPTIONS_CONTAINS(options, SDWebImageFromLoaderOnly);
     if (shouldQueryCache) {
         NSString *key = [self cacheKeyForURL:url context:context];
         @weakify(operation);
+        /*
+         当没缓存中找到时 将缓存对象cacheOperation保存在SDWebImageCombinedOperation对象中
+         
+         当在Memory中找到时Operation的值为nil
+         当在Disk中找到时Operation时 返回到NSOperation对象
+         
+         */
         operation.cacheOperation = [imageCache queryImageForKey:key options:options context:context cacheType:queryCacheType completion:^(UIImage * _Nullable cachedImage, NSData * _Nullable cachedData, SDImageCacheType cacheType) {
             @strongify(operation);
             if (!operation || operation.isCancelled) {
@@ -284,11 +302,11 @@ static id<SDImageLoader> _defaultImageLoader;
                 return;
             }
             
-            // Continue download process
+            // Continue download process 继续下载图片
             [self callDownloadProcessForOperation:operation url:url options:options context:context cachedImage:cachedImage cachedData:cachedData cacheType:cacheType progress:progressBlock completed:completedBlock];
         }];
     } else {
-        // Continue download process
+        // Continue download process 直接进行下载
         [self callDownloadProcessForOperation:operation url:url options:options context:context cachedImage:nil cachedData:nil cacheType:SDImageCacheTypeNone progress:progressBlock completed:completedBlock];
     }
 }
@@ -356,7 +374,7 @@ static id<SDImageLoader> _defaultImageLoader;
     }
 }
 
-// Download process
+// Download process 下载图片
 - (void)callDownloadProcessForOperation:(nonnull SDWebImageCombinedOperation *)operation
                                     url:(nonnull NSURL *)url
                                 options:(SDWebImageOptions)options
@@ -396,6 +414,11 @@ static id<SDImageLoader> _defaultImageLoader;
         }
         
         @weakify(operation);
+        /*
+         调用SDWebImageDownloader 的requestImageWithURL 返回一个SDWebImageDownloadToken对象,此对象遵守SDWebImageOperation协议，并且Token包含下载Operation对象，Operation是SDWebImageDownloaderOperation类继承自NSOperation
+         
+         将Token保存到SDWebImageCombinedOperation对象的loaderOperation对象中
+         */
         operation.loaderOperation = [imageLoader requestImageWithURL:url options:options context:context progress:progressBlock completed:^(UIImage *downloadedImage, NSData *downloadedData, NSError *error, BOOL finished) {
             @strongify(operation);
             if (!operation || operation.isCancelled) {
@@ -421,7 +444,7 @@ static id<SDImageLoader> _defaultImageLoader;
                     [self.failedURLs removeObject:url];
                     SD_UNLOCK(self.failedURLsLock);
                 }
-                // Continue store cache process
+                // Continue store cache process 下载完成回调 开始存储图片
                 [self callStoreCacheProcessForOperation:operation url:url options:options context:context downloadedImage:downloadedImage downloadedData:downloadedData finished:finished progress:progressBlock completed:completedBlock];
             }
             
@@ -430,16 +453,17 @@ static id<SDImageLoader> _defaultImageLoader;
             }
         }];
     } else if (cachedImage) {
+        //加载到缓存图片 完成回调
         [self callCompletionBlockForOperation:operation completion:completedBlock image:cachedImage data:cachedData error:nil cacheType:cacheType finished:YES url:url];
         [self safelyRemoveOperationFromRunning:operation];
     } else {
-        // Image not in cache and download disallowed by delegate
+        // Image not in cache and download disallowed by delegate 当缓存中没有找到时，进行下载操作
         [self callCompletionBlockForOperation:operation completion:completedBlock image:nil data:nil error:nil cacheType:SDImageCacheTypeNone finished:YES url:url];
         [self safelyRemoveOperationFromRunning:operation];
     }
 }
 
-// Store cache process
+// Store cache process 将下载的图片缓存起来
 - (void)callStoreCacheProcessForOperation:(nonnull SDWebImageCombinedOperation *)operation
                                       url:(nonnull NSURL *)url
                                   options:(SDWebImageOptions)options
@@ -556,6 +580,7 @@ static id<SDImageLoader> _defaultImageLoader;
 
 #pragma mark - Helper
 
+//移除操作
 - (void)safelyRemoveOperationFromRunning:(nullable SDWebImageCombinedOperation*)operation {
     if (!operation) {
         return;
@@ -637,8 +662,10 @@ static id<SDImageLoader> _defaultImageLoader;
     return shouldBlockFailedURL;
 }
 
+//通过URL
 - (SDWebImageOptionsResult *)processedResultForURL:(NSURL *)url options:(SDWebImageOptions)options context:(SDWebImageContext *)context {
     SDWebImageOptionsResult *result;
+    //
     SDWebImageMutableContext *mutableContext = [SDWebImageMutableContext dictionary];
     
     // Image Transformer from manager
@@ -681,6 +708,7 @@ static id<SDImageLoader> _defaultImageLoader;
 
 @implementation SDWebImageCombinedOperation
 
+//取消操作
 - (void)cancel {
     @synchronized(self) {
         if (self.isCancelled) {
@@ -688,13 +716,16 @@ static id<SDImageLoader> _defaultImageLoader;
         }
         self.cancelled = YES;
         if (self.cacheOperation) {
+            //取消缓存操作
             [self.cacheOperation cancel];
             self.cacheOperation = nil;
         }
         if (self.loaderOperation) {
+            //取消下载操作
             [self.loaderOperation cancel];
             self.loaderOperation = nil;
         }
+        //移除SDWebImagerManager中operation
         [self.manager safelyRemoveOperationFromRunning:self];
     }
 }

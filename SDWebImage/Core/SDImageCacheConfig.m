@@ -28,12 +28,12 @@ static const NSInteger kDefaultCacheMaxDiskAge = 60 * 60 * 24 * 7; // 1 week
         _shouldDisableiCloud = YES;
         _shouldCacheImagesInMemory = YES;
         _shouldUseWeakMemoryCache = YES;
-        _shouldRemoveExpiredDataWhenEnterBackground = YES;
+        _shouldRemoveExpiredDataWhenEnterBackground = YES; //当进入后台时 移除过期的数据
         _diskCacheReadingOptions = 0;
         _diskCacheWritingOptions = NSDataWritingAtomic;
-        _maxDiskAge = kDefaultCacheMaxDiskAge;
+        _maxDiskAge = kDefaultCacheMaxDiskAge; //磁盘最大的年龄是 7天也就是一周
         _maxDiskSize = 0;
-        _diskCacheExpireType = SDImageCacheConfigExpireTypeModificationDate;
+        _diskCacheExpireType = SDImageCacheConfigExpireTypeModificationDate; //磁盘过期时间
         _memoryCacheClass = [SDMemoryCache class];
         _diskCacheClass = [SDDiskCache class];
     }
